@@ -16,6 +16,8 @@
 
 #include "compiler/Target/CoralNPULinkerTool.h"
 
+#include "compiler/Transforms/Passes.h"
+
 // IREE headers
 #include "compiler/plugins/target/LLVMCPU/Builtins/Device.h"
 #include "compiler/plugins/target/LLVMCPU/Builtins/Musl.h"
@@ -36,6 +38,7 @@
 #include "iree/compiler/Utils/ModuleUtils.h"
 
 // MLIR headers
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
@@ -154,7 +157,8 @@ static constexpr char kQueryFunctionName[] =
 
 }  // namespace
 
-CoralNPUTargetBackend::CoralNPUTargetBackend(const CoralNPUOptions &options) {
+CoralNPUTargetBackend::CoralNPUTargetBackend(const CoralNPUOptions &options)
+    : options_(options) {
   IREE::HAL::LLVMCPUTargetCLOptions clOptions;
 
   clOptions.targetTriple = "riscv32";
@@ -235,6 +239,25 @@ void CoralNPUTargetBackend::getDependentDialects(
 
 void CoralNPUTargetBackend::buildConfigurationPassPipeline(
     IREE::HAL::ExecutableTargetAttr targetAttr, OpPassManager &passManager) {
+  CoralNPUTileSizeSelectionRegisterOptions registerOptions;
+  registerOptions.numVectorRegisters = options_.numVectorRegisters;
+  registerOptions.vectorAlignment = options_.tileVectorAlignment;
+  registerOptions.unrollAlignment = options_.tileUnrollAlignment;
+  registerOptions.reductionAlignment = options_.tileReductionAlignment;
+  registerOptions.parallelAlignment = options_.tileParallelAlignment;
+
+  passManager.nest<ModuleOp>().nest<func::FuncOp>().addPass(
+      createCoralNPUTileSizeSelectionRegisterPass(registerOptions));
+
+  CoralNPUTileSizeSelectionDTCMOptions dtcmOptions;
+  dtcmOptions.dtcmSizeKb = options_.dtcmSizeKb;
+
+  passManager.nest<ModuleOp>().nest<func::FuncOp>().addPass(
+      createCoralNPUTileSizeSelectionDTCMPass(dtcmOptions));
+
+  passManager.nest<ModuleOp>().nest<func::FuncOp>().addPass(
+      createCoralNPUTileSizeSelectionWorkgroupPass());
+
   buildLLVMCPUCodegenConfigurationPassPipeline(passManager);
 }
 
