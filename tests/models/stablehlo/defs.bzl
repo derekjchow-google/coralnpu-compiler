@@ -3,19 +3,16 @@
 load("//tests:defs.bzl", "coralnpu_check_gen_tests", "coralnpu_check_test")
 
 _COMMON_COMPILER_FLAGS = [
-    # configure the local target
-    "--iree-hal-target-device=local",
-    "--iree-hal-local-target-device-backends=vmvx",
-
     # configure the coralnpu target
     "--iree-hal-target-device=coralnpu",
     "--coralnpu-target-abi=ilp32",
-    "--coralnpu-target-cpu-features=+m,+f,+zvl128b,+zve32f",
+    "--coralnpu-target-cpu-features=" +
+    "+m,+a,+f,+d,+zve32f,+zvl128b," +
+    "+zvtbase,+zvt8e,+zvt16e,+zvti8i32mm,+zvtf16f32mm,+zvtf32f32mm",
     "> /dev/null",
 ]
 
 _COMMON_RUNNER_ARGS = [
-    "--device=local-sync",
     "--device=coralnpu",
 ]
 

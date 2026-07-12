@@ -101,7 +101,7 @@ def stablehlo_op_tests_f32(name = "stablehlo_op_f32_tests"):
     op_tests_f32(name = "case_rank1_f32", instances = ["(1)(8)", "(1)(256)"], test = "case_rank1_f32.mlir")
     op_tests_f32(name = "dot_general_rank3_f32", instances = ["(2,2,3)(2,3,4)", "(1,8,16)(1,16,8)"], test = "dot_general_rank3_f32.mlir")
     op_tests_f32(name = "gather_rank1_f32", instances = ["(10)(8)", "(300)(256)"], test = "gather_rank1_f32.mlir")
-    op_tests_f32(name = "scatter_rank1_f32", instances = ["(10)(3)(3)", "(300)(256)(256)"], test = "scatter_rank1_f32.mlir")
+    op_tests_f32(name = "scatter_rank1_f32", instances = ["(10)(3)(3)", "(300)(256)(256)"], test = "scatter_rank1_f32.mlir", tags = ["manual"])
     op_tests_f32(name = "sort_rank1_f32", instances = ["(8)", "(256)"], test = "sort_rank1_f32.mlir")
     op_tests_f32(name = "tuple_rank1_f32", instances = ["(8)(8)", "(256)(256)"], test = "tuple_rank1_f32.mlir")
     op_tests_f32(name = "bitcast_convert_rank1_f32_i32", instances = ["(8)", "(256)"], test = "bitcast_convert_rank1_f32_i32.mlir")

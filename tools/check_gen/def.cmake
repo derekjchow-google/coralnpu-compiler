@@ -34,7 +34,7 @@ function(check_gen_tests)
   cmake_parse_arguments(
     _RULE
     ""
-    "NAME;TEST;TIMEOUT;DEFAULT_GEN;DEFAULT_GEN_TARGET"
+    "NAME;TEST;TIMEOUT;DEFAULT_GEN;DEFAULT_GEN_TARGET;TARGET_BACKEND;DRIVER"
     "INSTANCES;ARG_GENS;ARG_GEN_TARGETS;COMPILER_FLAGS;RUNNER_ARGS;LABELS;DEPENDS"
     ${ARGN}
   )
@@ -112,15 +112,22 @@ function(check_gen_tests)
 
     set(TEST_NAME "${_RULE_NAME}_${SUFFIX}")
 
+    if(NOT _RULE_TARGET_BACKEND)
+      set(_RULE_TARGET_BACKEND "vmvx")
+    endif()
+    if(NOT _RULE_DRIVER)
+      set(_RULE_DRIVER "local-sync")
+    endif()
+
     iree_check_test(
       NAME
         "${TEST_NAME}"
       SRC
         "${OUT_FILE}"
       TARGET_BACKEND
-        "vmvx"
+        ${_RULE_TARGET_BACKEND}
       DRIVER
-        "local-sync"
+        ${_RULE_DRIVER}
       COMPILER_FLAGS
         ${_RULE_COMPILER_FLAGS}
       RUNNER_ARGS

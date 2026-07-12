@@ -32,12 +32,16 @@ iree_cc_library(
     "CoralNPUAffinityAnnotation.cpp"
     "CoralNPUDumpAffinityExecutionProfile.cpp"
     "CoralNPUTileSizeSelection.cpp"
+    "CoralNPUVectorToMatrix.cpp"
+    "CoralNPUMatrixToLLVM.cpp"
     "Passes.cpp"
   INCLUDES
     "${CMAKE_SOURCE_DIR}"
     "${CMAKE_CURRENT_BINARY_DIR}"
   DEPS
     ::PassesIncGen
+    MLIRLLVMDialect
+    MLIRVectorDialect
     iree::compiler::Codegen::Dialect::CPU::IR::IREECPUDialect
     iree::compiler::Codegen::Dialect::Codegen::IR::IREECodegenDialect
     iree::compiler::Codegen::Utils

@@ -20,6 +20,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${SCRIPT_DIR}"
 
+CORALNPU_CPU_FEATURES="+m,+a,+f,+d,+v,+zve32f,+zvl128b,""\
++zvtbase,+zvt8e,+zvt16e,+zvti8i32mm,+zvtf16f32mm,+zvtf32f32mm"
+
 main() {
   echo "=== Phase 1: Generating StableHLO MLIR ==="
   # bazel run sets BUILD_WORKSPACE_DIRECTORY, so it will write to source tree
@@ -34,7 +37,7 @@ main() {
     --iree-llvmcpu-target-cpu-features=host \
     --iree-hal-target-device=coralnpu \
     --coralnpu-target-abi=ilp32 \
-    --coralnpu-target-cpu-features=+m,+f,+zvl128b,+zve32f \
+    --coralnpu-target-cpu-features="${CORALNPU_CPU_FEATURES}" \
     --coralnpu-dump-affinity-profile-format=pretty \
     "${SCRIPT_DIR}/mobilenet_v2.mlir" \
     -o "${SCRIPT_DIR}/mobilenet_v2.vmfb"

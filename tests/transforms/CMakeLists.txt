@@ -18,7 +18,10 @@ iree_lit_test_suite(
   SRCS
     "dump_affinity_execution_profile.mlir"
     "dump_affinity_execution_profile_empty.mlir"
+    "vector_to_matrix.mlir"
+    "matrix_to_llvm.mlir"
   TOOLS
     FileCheck
+    iree-opt
     coralnpu_compiler::tools::coralnpu-compile
 )

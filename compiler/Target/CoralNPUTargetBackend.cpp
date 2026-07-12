@@ -15,7 +15,6 @@
 #include "compiler/Target/CoralNPUTargetBackend.h"
 
 #include "compiler/Target/CoralNPULinkerTool.h"
-
 #include "compiler/Transforms/Passes.h"
 
 // IREE headers

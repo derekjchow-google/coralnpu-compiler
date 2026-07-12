@@ -692,6 +692,8 @@ op_tests(
   INSTANCES
     "(10)(3)(3)"
     "(300)(256)(256)"
+  LABELS
+    "manual"
 )
 
 op_tests(

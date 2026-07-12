@@ -1,0 +1,62 @@
+diff --git a/build_tools/cmake/iree_llvm.cmake b/build_tools/cmake/iree_llvm.cmake
+index eabc3ee87..43671cd3c 100644
+--- a/build_tools/cmake/iree_llvm.cmake
++++ b/build_tools/cmake/iree_llvm.cmake
+@@ -34,11 +34,14 @@ macro(iree_llvm_configure_bundled)
+   set(LLVM_LIBRARY_OUTPUT_INTDIR "${CMAKE_CURRENT_BINARY_DIR}/llvm-project/lib")
+   set(LLVM_RUNTIME_OUTPUT_INTDIR "${CMAKE_CURRENT_BINARY_DIR}/llvm-project/bin")
+
+-  message(STATUS "Configuring third_party/llvm-project")
++  if(NOT DEFINED IREE_LLVM_SRC_DIR)
++    get_filename_component(IREE_LLVM_SRC_DIR "${IREE_SOURCE_DIR}/third_party/llvm-project" ABSOLUTE)
++  endif()
++  message(STATUS "Configuring LLVM project at ${IREE_LLVM_SRC_DIR}")
+   list(APPEND CMAKE_MESSAGE_INDENT "  ")
+-  set(_BUNDLED_LLVM_CMAKE_SOURCE_SUBDIR "third_party/llvm-project/llvm")
+-  add_subdirectory("${_BUNDLED_LLVM_CMAKE_SOURCE_SUBDIR}" "llvm-project" EXCLUDE_FROM_ALL)
+-  get_directory_property(LLVM_VERSION_MAJOR DIRECTORY "${_BUNDLED_LLVM_CMAKE_SOURCE_SUBDIR}" LLVM_VERSION_MAJOR)
++  set(_BUNDLED_LLVM_CMAKE_SOURCE_DIR "${IREE_LLVM_SRC_DIR}/llvm")
++  add_subdirectory("${_BUNDLED_LLVM_CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/llvm-project" EXCLUDE_FROM_ALL)
++  get_directory_property(LLVM_VERSION_MAJOR DIRECTORY "${_BUNDLED_LLVM_CMAKE_SOURCE_DIR}" LLVM_VERSION_MAJOR)
+   if (NOT LLVM_VERSION_MAJOR)
+     message(SEND_ERROR "Failed to read LLVM_VERSION_MAJOR property on LLVM directory. Should have been set since https://github.com/llvm/llvm-project/pull/83346.")
+   endif()
+@@ -64,21 +67,21 @@ macro(iree_llvm_configure_bundled)
+   list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
+
+   set(LLVM_INCLUDE_DIRS
+-    ${IREE_SOURCE_DIR}/${_BUNDLED_LLVM_CMAKE_SOURCE_SUBDIR}/include
++    ${IREE_LLVM_SRC_DIR}/llvm/include
+     ${IREE_BINARY_DIR}/llvm-project/include
+   )
+   set(MLIR_INCLUDE_DIRS
+-    ${IREE_SOURCE_DIR}/third_party/llvm-project/mlir/include
++    ${IREE_LLVM_SRC_DIR}/mlir/include
+     ${IREE_BINARY_DIR}/llvm-project/tools/mlir/include
+   )
+   set(LLD_INCLUDE_DIRS
+-    ${IREE_SOURCE_DIR}/third_party/llvm-project/lld/include
++    ${IREE_LLVM_SRC_DIR}/lld/include
+     ${IREE_BINARY_DIR}/llvm-project/tools/lld/include
+   )
+
+   set(LLVM_BINARY_DIR "${IREE_BINARY_DIR}/llvm-project")
+   set(LLVM_TOOLS_BINARY_DIR "${LLVM_BINARY_DIR}/bin")
+-  set(LLVM_EXTERNAL_LIT "${IREE_SOURCE_DIR}/${_BUNDLED_LLVM_CMAKE_SOURCE_SUBDIR}/utils/lit/lit.py")
++  set(LLVM_EXTERNAL_LIT "${IREE_LLVM_SRC_DIR}/llvm/utils/lit/lit.py")
+
+   set(IREE_LLVM_LINK_BINARY "$<TARGET_FILE:${IREE_LLVM_LINK_TARGET}>")
+   set(IREE_LLD_BINARY "$<TARGET_FILE:${IREE_LLD_TARGET}>")
+@@ -114,8 +117,11 @@ macro(iree_llvm_configure_installed)
+   # feel free to -DLLVM_EXTERNAL_LIT to provide your own.
+   # Note that LLVM style lit test helpers use LLVM_EXTERNAL_LIT, if provided,
+   # so this is consistent between the projects.
++  if(NOT DEFINED IREE_LLVM_SRC_DIR)
++    get_filename_component(IREE_LLVM_SRC_DIR "${IREE_SOURCE_DIR}/third_party/llvm-project" ABSOLUTE)
++  endif()
+   if(NOT LLVM_EXTERNAL_LIT)
+-    set(LLVM_EXTERNAL_LIT "${IREE_SOURCE_DIR}/third_party/llvm-project/llvm/utils/lit/lit.py")
++    set(LLVM_EXTERNAL_LIT "${IREE_LLVM_SRC_DIR}/llvm/utils/lit/lit.py")
+   endif()
+
+   set(IREE_LLVM_LINK_BINARY "$<TARGET_FILE:llvm-link>")

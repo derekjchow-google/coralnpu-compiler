@@ -24,7 +24,7 @@ expand_template(
     name = "coralnpu_tcm_ld",
     out = "coralnpu_tcm.ld",
     substitutions = {
-        "@@ITCM_LENGTH@@": "8",
+        "@@ITCM_LENGTH@@": "32",
         "@@DTCM_ORIGIN@@": "0x00010000",
         "@@DTCM_LENGTH@@": "32",
         "@@STACK_SIZE@@": "4096",

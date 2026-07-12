@@ -6,6 +6,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
+CORALNPU_CPU_FEATURES="+m,+a,+f,+d,+v,+zve32f,+zvl128b,""\
++zvtbase,+zvt8e,+zvt16e,+zvti8i32mm,+zvtf16f32mm,+zvtf32f32mm"
+
 usage() {
   echo "Usage: $0 {--bazel|--cmake}"
 }
@@ -93,7 +96,7 @@ main() {
   # Configure the CoralNPU device
   iree_compile_options+=(--iree-hal-target-device=coralnpu)
   iree_compile_options+=(--coralnpu-target-abi=ilp32)
-  iree_compile_options+=(--coralnpu-target-cpu-features="+m,+f,+zvl128b,+zve32x")
+  iree_compile_options+=(--coralnpu-target-cpu-features="${CORALNPU_CPU_FEATURES}")
 
   "${IREE_COMPILE[@]}" "${iree_compile_options[@]}"
 
@@ -133,7 +136,7 @@ main() {
   # Configure the CoralNPU device
   iree_compile_options+=(--iree-hal-target-device=coralnpu)
   iree_compile_options+=(--coralnpu-target-abi=ilp32)
-  iree_compile_options+=(--coralnpu-target-cpu-features="+m,+f,+zvl128b,+zve32x")
+  iree_compile_options+=(--coralnpu-target-cpu-features="${CORALNPU_CPU_FEATURES}")
 
   "${IREE_COMPILE[@]}" "${iree_compile_options[@]}"
 

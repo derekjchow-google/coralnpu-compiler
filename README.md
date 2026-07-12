@@ -234,6 +234,10 @@ bazel run --config={dev|release} //compiler/tools:coralnpu-compile -- [coralnpu-
 For example, to compile model.mlir:
 
 ```shell
+# Define features to avoid long line
+CPU_FEATURES="+m,+a,+f,+d,+v,+zve32f,+zvl128b,"\
+"+zvtbase,+zvt8e,+zvt16e,+zvti8i32mm,+zvtf16f32mm,+zvtf32f32mm"
+
 # Compile for the host machine + CoralNPU (will run in simulation)
 bazel run --config=dev //compiler/tools:coralnpu-compile -- \
     --iree-hal-target-device=local \
@@ -241,7 +245,7 @@ bazel run --config=dev //compiler/tools:coralnpu-compile -- \
     --iree-llvmcpu-target-cpu-features=host \
     --iree-hal-target-device=coralnpu \
     --coralnpu-target-abi=ilp32 \
-    --coralnpu-target-cpu-features=+m,+f,+zvl128b,+zve32f \
+    --coralnpu-target-cpu-features="${CPU_FEATURES}" \
     model.mlir \
     -o model.vmfb
 ```

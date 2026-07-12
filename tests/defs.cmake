@@ -94,6 +94,10 @@ function(coralnpu_check_gen_tests)
       ${GEN_TARGETS}
     INSTANCES
       ${_RULE_INSTANCES}
+    TARGET_BACKEND
+      "coralnpu"
+    DRIVER
+      "coralnpu"
     COMPILER_FLAGS
       ${_RULE_COMPILER_FLAGS}
     RUNNER_ARGS
@@ -102,6 +106,8 @@ function(coralnpu_check_gen_tests)
       "driver=coralnpu"
       "target=coralnpu"
       ${_RULE_LABELS}
+    DEPENDS
+      coralnpu_crt_project
     TIMEOUT
       ${_RULE_TIMEOUT}
   )

@@ -102,7 +102,8 @@ if(NOT EXISTS "${CORALNPU_LINKER_PATH}")
   )
 endif()
 
-set(LLVM_EXTERNAL_LIT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/llvm-project/llvm/utils/lit/lit.py" CACHE FILEPATH "Path to llvm-lit" FORCE)
+set(IREE_LLVM_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/llvm-project" CACHE PATH "Path to LLVM source directory" FORCE)
+set(LLVM_EXTERNAL_LIT "${IREE_LLVM_SRC_DIR}/llvm/utils/lit/lit.py" CACHE FILEPATH "Path to llvm-lit" FORCE)
 
 add_subdirectory(third_party/iree)
 

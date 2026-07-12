@@ -73,6 +73,10 @@ def CoralNPUTileSizeSelectionRegister : InterfacePass<"coralnpu-tile-size-select
   let constructor = [{
     ::mlir::coralnpu_compiler::createCoralNPUTileSizeSelectionRegisterPass()
   }];
+  let dependentDialects = [
+    "::mlir::iree_compiler::IREE::Codegen::IREECodegenDialect",
+    "::mlir::iree_compiler::IREE::CPU::IREECPUDialect"
+  ];
   let options = [
     Option<"numVectorRegisters", "num-vector-registers", "int",
            /*default=*/"32",
@@ -122,6 +126,40 @@ def CoralNPUTileSizeSelectionWorkgroup : InterfacePass<"coralnpu-tile-size-selec
   let constructor = [{
     ::mlir::coralnpu_compiler::createCoralNPUTileSizeSelectionWorkgroupPass()
   }];
+}
+
+def CoralNPUVectorToMatrix : InterfacePass<"coralnpu-vector-to-matrix", "mlir::FunctionOpInterface"> {
+  let summary = "Lowers vector ops to Matrix instructions";
+  let description = [{
+    This pass lowers vector.contract and vector.outerproduct operations
+    to Matrix instructions (represented as LLVM intrinsics) when
+    supported by the target hardware.
+  }];
+  let constructor = [{
+    ::mlir::coralnpu_compiler::createCoralNPUVectorToMatrixPass()
+  }];
+  let dependentDialects = [
+    "::mlir::arith::ArithDialect",
+    "::mlir::func::FuncDialect",
+    "::mlir::LLVM::LLVMDialect",
+    "::mlir::memref::MemRefDialect",
+    "::mlir::scf::SCFDialect",
+    "::mlir::vector::VectorDialect"
+  ];
+}
+
+def CoralNPUMatrixToLLVM : Pass<"coralnpu-matrix-to-llvm", "ModuleOp"> {
+  let summary = "Lowers Matrix placeholders to LLVM dialect";
+  let description = [{
+    This pass lowers Matrix placeholder functions and calls (like writeback)
+    to LLVM dialect intrinsics and pointer calculations.
+  }];
+  let constructor = [{
+    ::mlir::coralnpu_compiler::createCoralNPUMatrixToLLVMPass()
+  }];
+  let dependentDialects = [
+    "LLVM::LLVMDialect"
+  ];
 }
 
 #endif // IREE_CORALNPU_PASSES

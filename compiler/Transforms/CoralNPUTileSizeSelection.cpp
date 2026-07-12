@@ -36,7 +36,9 @@
 
 // MLIR headers
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Builders.h"
@@ -67,13 +69,13 @@ namespace mlir::coralnpu_compiler {
 
 namespace {
 
-// Helper to create a tiling level attribute with default (false) scalable flags.
-// This is needed to prevent crashes in IREE passes (e.g. LLVMCPUSplitReduction)
-// that assume scalable flags are present.
+// Helper to create a tiling level attribute with default (false) scalable
+// flags. This is needed to prevent crashes in IREE passes (e.g.
+// LLVMCPUSplitReduction) that assume scalable flags are present.
 Attribute getTilingLevelAttr(MLIRContext *context, ArrayRef<int64_t> sizes) {
   SmallVector<bool> scalableFlags(sizes.size(), false);
   return IREE::CPU::LoweringConfigAttr::getTilingLevelAttr(context, sizes,
-                                                          scalableFlags);
+                                                           scalableFlags);
 }
 
 // Classifies loops of a TilingInterface operation into logical categories
@@ -88,6 +90,11 @@ Attribute getTilingLevelAttr(MLIRContext *context, ArrayRef<int64_t> sizes) {
 // - Batch (N) and Spatial (OH, OW) loops -> vectorLoops (parallel)
 // - Output Channel (OC) loop             -> unrollLoops (parallel)
 // - Filter (KH, KW) and Input Channel (IC) loops -> reductionLoops (reduction)
+bool isSupportedMatrixContraction(TilingInterface op) {
+  return isa<linalg::MatmulOp, linalg::BatchMatmulOp, linalg::Mmt4DOp,
+             linalg::BatchMmt4DOp>(op.getOperation());
+}
+
 struct LoopClassification {
   // Parallel loops associated primarily with the LHS or batch/spatial
   // dimensions. Typically aligned to the hardware vector length (VLEN).
@@ -100,13 +107,61 @@ struct LoopClassification {
 
   // Reduction loops. Typically tiled to 1 at the register level.
   SmallVector<size_t> reductionLoops;
+
+  // Batch loops. Typically tiled to 1 at the register level for Matrix.
+  SmallVector<size_t> batchLoops;
 };
+
+bool isDepthwiseConvLike(linalg::LinalgOp linalgOp) {
+  if (linalgOp.getNumDpsInputs() != 2 || linalgOp.getNumDpsInits() != 1) {
+    return false;
+  }
+  auto tilingInterfaceOp = dyn_cast<TilingInterface>(linalgOp.getOperation());
+  if (!tilingInterfaceOp) return false;
+  auto iterTypes = tilingInterfaceOp.getLoopIteratorTypes();
+  int64_t numParallel = 0;
+  int64_t numReduction = 0;
+  for (auto type : iterTypes) {
+    if (type == utils::IteratorType::parallel)
+      numParallel++;
+    else if (type == utils::IteratorType::reduction)
+      numReduction++;
+    else
+      return false;
+  }
+  if (numParallel < 3 || numReduction < 2) return false;
+  auto lhsMap = linalgOp.getMatchingIndexingMap(linalgOp.getDpsInputOperand(0));
+  auto rhsMap = linalgOp.getMatchingIndexingMap(linalgOp.getDpsInputOperand(1));
+  auto outMap = linalgOp.getMatchingIndexingMap(linalgOp.getDpsInitOperand(0));
+  unsigned channelDim = numParallel - 1;
+  if (iterTypes[channelDim] != utils::IteratorType::parallel) return false;
+  if (!lhsMap.isFunctionOfDim(channelDim) ||
+      !rhsMap.isFunctionOfDim(channelDim) ||
+      !outMap.isFunctionOfDim(channelDim)) {
+    return false;
+  }
+  for (unsigned i = 0; i < rhsMap.getNumResults(); ++i) {
+    auto expr = rhsMap.getResult(i);
+    if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
+      unsigned dim = dimExpr.getPosition();
+      if (dim != channelDim &&
+          iterTypes[dim] != utils::IteratorType::reduction) {
+        return false;
+      }
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
 
 // Refines parallel loops for Linalg operations to distinguish M and N loops
 // for matmul-like alignment.
 void refineLinalgOpLoops(linalg::LinalgOp linalgOp,
                          LoopClassification &classification) {
   if (linalgOp.getNumDpsInputs() < 2) return;
+
+  bool isDepthwiseConv = isDepthwiseConvLike(linalgOp);
 
   auto lhsMap = linalgOp.getMatchingIndexingMap(linalgOp.getDpsInputOperand(0));
   auto rhsMap = linalgOp.getMatchingIndexingMap(linalgOp.getDpsInputOperand(1));
@@ -115,16 +170,25 @@ void refineLinalgOpLoops(linalg::LinalgOp linalgOp,
   std::swap(parallelLoops, classification.vectorLoops);
 
   for (size_t parallelLoop : parallelLoops) {
-    if (lhsMap.isFunctionOfDim(parallelLoop)) {
+    bool inLHS = lhsMap.isFunctionOfDim(parallelLoop);
+    bool inRHS = rhsMap.isFunctionOfDim(parallelLoop);
+
+    if (inLHS && inRHS) {
+      if (isDepthwiseConv) {
+        classification.vectorLoops.push_back(parallelLoop);
+      } else {
+        classification.batchLoops.push_back(parallelLoop);
+      }
+      continue;
+    }
+    if (inLHS) {
       classification.vectorLoops.push_back(parallelLoop);
       continue;
     }
-
-    if (rhsMap.isFunctionOfDim(parallelLoop)) {
+    if (inRHS) {
       classification.unrollLoops.push_back(parallelLoop);
       continue;
     }
-
     classification.vectorLoops.push_back(parallelLoop);
   }
 }
@@ -528,6 +592,7 @@ struct CoralNPUTilingAnalysis {
   LoopClassification classification;
   SmallVector<int64_t> staticLoopRanges;
   int64_t elemSizeBytes = 0;
+  bool hasComputeOps = false;
   LogicalResult status = failure();
 
   explicit CoralNPUTilingAnalysis(Operation *op) {
@@ -535,29 +600,45 @@ struct CoralNPUTilingAnalysis {
     if (!funcOp) return;
 
     SmallVector<Operation *> computeOps = getComputeOps(funcOp);
+    if (computeOps.empty()) {
+      status = success();
+      return;
+    }
+    hasComputeOps = true;
+
     auto rootOpOr = getRootOperation(computeOps);
     if (failed(rootOpOr) || !rootOpOr.value()) return;
 
     rootTilingOp = dyn_cast<TilingInterface>(*rootOpOr);
     if (!rootTilingOp) {
-      rootOpOr.value()->emitWarning("root operation is not a TilingInterface; skipping tile size selection");
+      rootOpOr.value()->emitWarning(
+          "root operation is not a TilingInterface; skipping tile size "
+          "selection");
       return;
     }
 
     // Element size
     if (rootTilingOp->getNumResults() > 0) {
-      if (auto type = dyn_cast<ShapedType>(rootTilingOp->getResult(0).getType())) {
+      if (auto type =
+              dyn_cast<ShapedType>(rootTilingOp->getResult(0).getType())) {
         auto elemType = type.getElementType();
         if (!elemType.isIntOrFloat()) {
-          rootTilingOp->emitWarning("only integer and float types are supported");
+          rootTilingOp->emitWarning(
+              "only integer and float types are supported");
           return;
         }
         auto elemBitWidth = elemType.getIntOrFloatBitWidth();
         if (elemBitWidth < 8) {
-          rootTilingOp->emitWarning("sub-byte types (e.g. i1, i4) are not supported");
-          return;
+          if (elemType.isInteger(1)) {
+            elemSizeBytes = 1;
+          } else {
+            rootTilingOp->emitWarning(
+                "sub-byte types (e.g. i4) are not supported");
+            return;
+          }
+        } else {
+          elemSizeBytes = elemBitWidth / 8;
         }
-        elemSizeBytes = elemBitWidth / 8;
       }
     }
 
@@ -575,10 +656,37 @@ struct CoralNPUTilingAnalysis {
   }
 };
 
+static bool isReverseOp(Operation *op) {
+  auto genericOp = dyn_cast<linalg::GenericOp>(op);
+  if (!genericOp) return false;
+
+  bool hasIndex = false;
+  genericOp.getBody()->walk([&](linalg::IndexOp indexOp) {
+    hasIndex = true;
+    return WalkResult::interrupt();
+  });
+
+  bool hasSubi = false;
+  genericOp.getBody()->walk([&](arith::SubIOp subOp) {
+    Value lhs = subOp.getLhs();
+    if (lhs.getDefiningOp<arith::ConstantOp>() ||
+        lhs.getDefiningOp<arith::ConstantIndexOp>() ||
+        lhs.getDefiningOp<tensor::DimOp>() ||
+        lhs.getDefiningOp<arith::SubIOp>()) {
+      hasSubi = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+
+  return hasIndex && hasSubi;
+}
+
 struct CoralNPUTileSizeSelectionRegisterPass
     : public impl::CoralNPUTileSizeSelectionRegisterBase<
           CoralNPUTileSizeSelectionRegisterPass> {
-  using CoralNPUTileSizeSelectionRegisterBase::CoralNPUTileSizeSelectionRegisterBase;
+  using CoralNPUTileSizeSelectionRegisterBase::
+      CoralNPUTileSizeSelectionRegisterBase;
 
   void runOnOperation() override {
     auto funcOp = getOperation();
@@ -598,6 +706,9 @@ struct CoralNPUTileSizeSelectionRegisterPass
       signalPassFailure();
       return;
     }
+    if (!analysis.hasComputeOps) {
+      return;
+    }
 
     auto tilingOp = analysis.rootTilingOp;
     int64_t elemSizeBytes = analysis.elemSizeBytes;
@@ -612,29 +723,74 @@ struct CoralNPUTileSizeSelectionRegisterPass
     assert(vectorWidth > 0);
 
     // 3. Resolve alignments
-    Alignments alignments = {
-        vectorAlignment, unrollAlignment, reductionAlignment};
-    resolveAlignments(vectorWidth, numVectorRegisters, analysis.classification,
-                      analysis.staticLoopRanges, parallelAlignment, alignments);
+    Alignments alignments = {vectorAlignment, unrollAlignment,
+                             reductionAlignment};
+    bool hasMatrix = hasFeature(targetAttr.getConfiguration(), "+zvtbase") &&
+                     isSupportedMatrixContraction(analysis.rootTilingOp);
+    if (hasMatrix) {
+      // For Matrix, the register tile is determined by the hardware matrix
+      // multiplier shape. For CoralNPU, it is 4x4 for FP32.
+      // TODO: query exact tile size based on data type and target features
+      // (e.g. +zvtf32f32mm). We hardcode 4x4 for now.
+      alignments.vectorAlign = 4;
+      alignments.unrollAlign = 4;
+      alignments.reductionAlign = 1;
+    } else {
+      resolveAlignments(vectorWidth, numVectorRegisters,
+                        analysis.classification, analysis.staticLoopRanges,
+                        parallelAlignment, alignments);
+    }
 
     // 4. Compute register tile sizes
     int64_t numLoops = analysis.staticLoopRanges.size();
     SmallVector<int64_t> vectorParallelSizes(numLoops, 0);
     SmallVector<int64_t> vectorReductionSizes(numLoops, 0);
 
-    for (size_t vectorLoopIdx : analysis.classification.vectorLoops) {
-      vectorParallelSizes[vectorLoopIdx] = std::min<int64_t>(
-          analysis.staticLoopRanges[vectorLoopIdx], alignments.vectorAlign);
-    }
+    if (analysis.classification.unrollLoops.empty()) {
+      size_t vectorLoopIdxToAlign = -1;
+      if (!analysis.classification.vectorLoops.empty()) {
+        vectorLoopIdxToAlign = analysis.classification.vectorLoops.back();
+      }
 
-    for (size_t unrollLoopIdx : analysis.classification.unrollLoops) {
-      vectorParallelSizes[unrollLoopIdx] = std::min<int64_t>(
-          analysis.staticLoopRanges[unrollLoopIdx], alignments.unrollAlign);
+      for (size_t vectorLoopIdx : analysis.classification.vectorLoops) {
+        if (vectorLoopIdx == vectorLoopIdxToAlign) {
+          vectorParallelSizes[vectorLoopIdx] = std::min<int64_t>(
+              analysis.staticLoopRanges[vectorLoopIdx], vectorWidth);
+        } else {
+          vectorParallelSizes[vectorLoopIdx] = 1;
+        }
+      }
+      for (size_t batchLoopIdx : analysis.classification.batchLoops) {
+        vectorParallelSizes[batchLoopIdx] = 1;
+      }
+    } else {
+      for (size_t vectorLoopIdx : analysis.classification.vectorLoops) {
+        vectorParallelSizes[vectorLoopIdx] = std::min<int64_t>(
+            analysis.staticLoopRanges[vectorLoopIdx], alignments.vectorAlign);
+      }
+
+      for (size_t unrollLoopIdx : analysis.classification.unrollLoops) {
+        vectorParallelSizes[unrollLoopIdx] = std::min<int64_t>(
+            analysis.staticLoopRanges[unrollLoopIdx], alignments.unrollAlign);
+        if (vectorParallelSizes[unrollLoopIdx] == 2) {
+          vectorParallelSizes[unrollLoopIdx] = 1;
+        }
+      }
+
+      int64_t batchAlign = 1;
+      if (!hasMatrix) {
+        batchAlign = alignments.vectorAlign;
+      }
+      for (size_t batchLoopIdx : analysis.classification.batchLoops) {
+        vectorParallelSizes[batchLoopIdx] = std::min<int64_t>(
+            analysis.staticLoopRanges[batchLoopIdx], batchAlign);
+      }
     }
 
     for (size_t reductionLoopIdx : analysis.classification.reductionLoops) {
-      vectorReductionSizes[reductionLoopIdx] = std::min<int64_t>(
-          analysis.staticLoopRanges[reductionLoopIdx], alignments.reductionAlign);
+      vectorReductionSizes[reductionLoopIdx] =
+          std::min<int64_t>(analysis.staticLoopRanges[reductionLoopIdx],
+                            alignments.reductionAlign);
     }
 
     // 5. Set in lowering config
@@ -657,9 +813,13 @@ struct CoralNPUTileSizeSelectionRegisterPass
     auto loweringConfig =
         IREE::CPU::LoweringConfigAttr::get(context, configItems);
 
-    auto translationInfo = IREE::Codegen::TranslationInfoAttr::get(
-        context,
-        IREE::Codegen::DispatchLoweringPassPipeline::CPUDoubleTilingExpert);
+    auto pipeline =
+        IREE::Codegen::DispatchLoweringPassPipeline::CPUDoubleTilingExpert;
+    if (isReverseOp(tilingOp)) {
+      pipeline = IREE::Codegen::DispatchLoweringPassPipeline::CPUDefault;
+    }
+    auto translationInfo =
+        IREE::Codegen::TranslationInfoAttr::get(context, pipeline);
 
     auto compilationInfo = IREE::Codegen::CompilationInfoAttr::get(
         context, loweringConfig, translationInfo);
@@ -695,18 +855,23 @@ struct CoralNPUTileSizeSelectionDTCMPass
       signalPassFailure();
       return;
     }
+    if (!analysis.hasComputeOps) {
+      return;
+    }
 
     auto tilingOp = analysis.rootTilingOp;
 
     auto compilationInfo = getCompilationInfo(tilingOp.getOperation());
     if (!compilationInfo) {
-      tilingOp->emitOpError("missing compilation info from register tiling pass");
+      tilingOp->emitOpError(
+          "missing compilation info from register tiling pass");
       signalPassFailure();
       return;
     }
 
     auto loweringConfig = compilationInfo.getLoweringConfig();
-    auto cpuLoweringConfig = dyn_cast<IREE::CPU::LoweringConfigAttr>(loweringConfig);
+    auto cpuLoweringConfig =
+        dyn_cast<IREE::CPU::LoweringConfigAttr>(loweringConfig);
     if (!cpuLoweringConfig) {
       tilingOp->emitOpError("expected CPU lowering config");
       signalPassFailure();
@@ -714,9 +879,12 @@ struct CoralNPUTileSizeSelectionDTCMPass
     }
 
     Alignments alignments = {1, 1, 1};
+    int64_t batchAlign = 1;
 
-    auto vectorParallelLevel = IREE::CPU::TilingLevel::VectorCommonParallelTiles;
-    if (cpuLoweringConfig.hasTilingLevel(static_cast<unsigned>(vectorParallelLevel))) {
+    auto vectorParallelLevel =
+        IREE::CPU::TilingLevel::VectorCommonParallelTiles;
+    if (cpuLoweringConfig.hasTilingLevel(
+            static_cast<unsigned>(vectorParallelLevel))) {
       auto sizes = cpuLoweringConfig.getStaticTilingLevelSizes(
           static_cast<unsigned>(vectorParallelLevel), tilingOp.getOperation());
       for (size_t idx : analysis.classification.vectorLoops) {
@@ -729,56 +897,92 @@ struct CoralNPUTileSizeSelectionDTCMPass
           alignments.unrollAlign = std::max(alignments.unrollAlign, sizes[idx]);
         }
       }
-    }
-
-    auto vectorReductionLevel = IREE::CPU::TilingLevel::VectorReductionTiles;
-    if (cpuLoweringConfig.hasTilingLevel(static_cast<unsigned>(vectorReductionLevel))) {
-      auto sizes = cpuLoweringConfig.getStaticTilingLevelSizes(
-          static_cast<unsigned>(vectorReductionLevel),
-          tilingOp.getOperation());
-      for (size_t idx : analysis.classification.reductionLoops) {
+      for (size_t idx : analysis.classification.batchLoops) {
         if (idx < sizes.size() && sizes[idx] > 0) {
-          alignments.reductionAlign = std::max(alignments.reductionAlign, sizes[idx]);
+          batchAlign = std::max(batchAlign, sizes[idx]);
         }
       }
     }
+
+    auto vectorReductionLevel = IREE::CPU::TilingLevel::VectorReductionTiles;
+    if (cpuLoweringConfig.hasTilingLevel(
+            static_cast<unsigned>(vectorReductionLevel))) {
+      auto sizes = cpuLoweringConfig.getStaticTilingLevelSizes(
+          static_cast<unsigned>(vectorReductionLevel), tilingOp.getOperation());
+      for (size_t idx : analysis.classification.reductionLoops) {
+        if (idx < sizes.size() && sizes[idx] > 0) {
+          alignments.reductionAlign =
+              std::max(alignments.reductionAlign, sizes[idx]);
+        }
+      }
+    }
+
+    bool hasMatrix = hasFeature(targetAttr.getConfiguration(), "+zvtbase") &&
+                     isSupportedMatrixContraction(tilingOp);
+    int64_t maxParallelTileSize = hasMatrix ? 64 : 16;
 
     SmallVector<int64_t> dtcmTileSizes(analysis.staticLoopRanges);
 
     // TODO: check (i.e. benchmark) that this is actually helpful, especially
     // when the operation fits in DTCM without tiling.
-    alignTileSizes(analysis.classification.vectorLoops, alignments.vectorAlign, dtcmTileSizes);
-    alignTileSizes(analysis.classification.unrollLoops, alignments.unrollAlign, dtcmTileSizes);
-    alignTileSizes(analysis.classification.reductionLoops, alignments.reductionAlign,
+    alignTileSizes(analysis.classification.vectorLoops, alignments.vectorAlign,
                    dtcmTileSizes);
+    alignTileSizes(analysis.classification.unrollLoops, alignments.unrollAlign,
+                   dtcmTileSizes);
+    alignTileSizes(analysis.classification.batchLoops, batchAlign,
+                   dtcmTileSizes);
+    alignTileSizes(analysis.classification.reductionLoops,
+                   alignments.reductionAlign, dtcmTileSizes);
 
-    // TODO: tune the safetyMultiplier (do we want a commandline option for it?).
+    for (size_t idx : analysis.classification.vectorLoops) {
+      if (dtcmTileSizes[idx] > 0) {
+        dtcmTileSizes[idx] =
+            std::min<int64_t>(dtcmTileSizes[idx], maxParallelTileSize);
+      }
+    }
+    for (size_t idx : analysis.classification.unrollLoops) {
+      if (dtcmTileSizes[idx] > 0) {
+        dtcmTileSizes[idx] =
+            std::min<int64_t>(dtcmTileSizes[idx], maxParallelTileSize);
+      }
+    }
+
+    // TODO: tune the safetyMultiplier (do we want a commandline option for
+    // it?).
     double safetyMultiplier = 1.2;
     bool fallback = false;
     while (static_cast<double>(estimateFootprint(tilingOp, dtcmTileSizes)) *
                safetyMultiplier >
            dtcmLimitBytes) {
-      if (shrinkLoops(analysis.classification.vectorLoops, alignments.vectorAlign, dtcmTileSizes))
+      if (shrinkLoops(analysis.classification.vectorLoops,
+                      alignments.vectorAlign, dtcmTileSizes))
         continue;
 
-      if (shrinkLoops(analysis.classification.unrollLoops, alignments.unrollAlign, dtcmTileSizes))
+      if (shrinkLoops(analysis.classification.unrollLoops,
+                      alignments.unrollAlign, dtcmTileSizes))
         continue;
 
-      if (shrinkLoops(analysis.classification.reductionLoops, alignments.reductionAlign,
+      if (shrinkLoops(analysis.classification.batchLoops, batchAlign,
                       dtcmTileSizes))
         continue;
 
+      if (shrinkLoops(analysis.classification.reductionLoops,
+                      alignments.reductionAlign, dtcmTileSizes))
+        continue;
+
       if (alignments.vectorAlign > 1 || alignments.unrollAlign > 1 ||
-          alignments.reductionAlign > 1) {
+          alignments.reductionAlign > 1 || batchAlign > 1) {
         tilingOp->emitWarning(llvm::formatv(
             "workload cannot fit in DTCM with resolved alignments (vector={0}, "
-            "unroll={1}, reduction={2}); falling back to alignment 1",
+            "unroll={1}, reduction={2}, batch={3}); falling back to alignment "
+            "1",
             alignments.vectorAlign, alignments.unrollAlign,
-            alignments.reductionAlign));
+            alignments.reductionAlign, batchAlign));
 
         alignments.vectorAlign = 1;
         alignments.unrollAlign = 1;
         alignments.reductionAlign = 1;
+        batchAlign = 1;
         fallback = true;
         dtcmTileSizes = analysis.staticLoopRanges;
         continue;
@@ -810,13 +1014,16 @@ struct CoralNPUTileSizeSelectionDTCMPass
       distParallelSizes[unrollLoopIdx] = dtcmTileSizes[unrollLoopIdx];
     }
 
+    for (size_t batchLoopIdx : analysis.classification.batchLoops) {
+      distParallelSizes[batchLoopIdx] = dtcmTileSizes[batchLoopIdx];
+    }
+
     for (size_t reductionLoopIdx : analysis.classification.reductionLoops) {
       cacheReductionSizes[reductionLoopIdx] = dtcmTileSizes[reductionLoopIdx];
     }
 
     auto distParallelAttr = getTilingLevelAttr(context, distParallelSizes);
-    auto cacheReductionAttr =
-        getTilingLevelAttr(context, cacheReductionSizes);
+    auto cacheReductionAttr = getTilingLevelAttr(context, cacheReductionSizes);
 
     SmallVector<NamedAttribute> configItems;
     DictionaryAttr oldDict = cpuLoweringConfig.getConfig();
@@ -825,7 +1032,8 @@ struct CoralNPUTileSizeSelectionDTCMPass
     }
 
     auto updateConfigItem = [&](IREE::CPU::TilingLevel level, Attribute attr) {
-      auto name = StringAttr::get(context, IREE::CPU::getTilingLevelName(level));
+      auto name =
+          StringAttr::get(context, IREE::CPU::getTilingLevelName(level));
       for (auto &item : configItems) {
         if (item.getName() == name) {
           item.setValue(attr);
@@ -835,26 +1043,34 @@ struct CoralNPUTileSizeSelectionDTCMPass
       configItems.push_back(NamedAttribute(name, attr));
     };
 
-    updateConfigItem(IREE::CPU::TilingLevel::CacheParallelTiles, distParallelAttr);
-    updateConfigItem(IREE::CPU::TilingLevel::CacheReductionTiles, cacheReductionAttr);
+    updateConfigItem(IREE::CPU::TilingLevel::CacheParallelTiles,
+                     distParallelAttr);
+    updateConfigItem(IREE::CPU::TilingLevel::CacheReductionTiles,
+                     cacheReductionAttr);
 
     if (fallback) {
       SmallVector<int64_t> vectorParallelSizes(numLoops, 0);
       SmallVector<int64_t> vectorReductionSizes(numLoops, 0);
       for (size_t vectorLoopIdx : analysis.classification.vectorLoops) {
-        vectorParallelSizes[vectorLoopIdx] = std::min<int64_t>(dtcmTileSizes[vectorLoopIdx], 1);
+        vectorParallelSizes[vectorLoopIdx] =
+            std::min<int64_t>(dtcmTileSizes[vectorLoopIdx], 1);
       }
       for (size_t unrollLoopIdx : analysis.classification.unrollLoops) {
-        vectorParallelSizes[unrollLoopIdx] = std::min<int64_t>(dtcmTileSizes[unrollLoopIdx], 1);
+        vectorParallelSizes[unrollLoopIdx] =
+            std::min<int64_t>(dtcmTileSizes[unrollLoopIdx], 1);
       }
       for (size_t reductionLoopIdx : analysis.classification.reductionLoops) {
-        vectorReductionSizes[reductionLoopIdx] = std::min<int64_t>(dtcmTileSizes[reductionLoopIdx], 1);
+        vectorReductionSizes[reductionLoopIdx] =
+            std::min<int64_t>(dtcmTileSizes[reductionLoopIdx], 1);
       }
-      auto vectorParallelAttr = getTilingLevelAttr(context, vectorParallelSizes);
+      auto vectorParallelAttr =
+          getTilingLevelAttr(context, vectorParallelSizes);
       auto vectorReductionAttr =
           getTilingLevelAttr(context, vectorReductionSizes);
-      updateConfigItem(IREE::CPU::TilingLevel::VectorCommonParallelTiles, vectorParallelAttr);
-      updateConfigItem(IREE::CPU::TilingLevel::VectorReductionTiles, vectorReductionAttr);
+      updateConfigItem(IREE::CPU::TilingLevel::VectorCommonParallelTiles,
+                       vectorParallelAttr);
+      updateConfigItem(IREE::CPU::TilingLevel::VectorReductionTiles,
+                       vectorReductionAttr);
     }
 
     auto newLoweringConfig =
@@ -871,7 +1087,8 @@ struct CoralNPUTileSizeSelectionDTCMPass
 struct CoralNPUTileSizeSelectionWorkgroupPass
     : public impl::CoralNPUTileSizeSelectionWorkgroupBase<
           CoralNPUTileSizeSelectionWorkgroupPass> {
-  using CoralNPUTileSizeSelectionWorkgroupBase::CoralNPUTileSizeSelectionWorkgroupBase;
+  using CoralNPUTileSizeSelectionWorkgroupBase::
+      CoralNPUTileSizeSelectionWorkgroupBase;
 
   void runOnOperation() override {
     auto funcOp = getOperation();
@@ -887,6 +1104,9 @@ struct CoralNPUTileSizeSelectionWorkgroupPass
       signalPassFailure();
       return;
     }
+    if (!analysis.hasComputeOps) {
+      return;
+    }
 
     auto tilingOp = analysis.rootTilingOp;
 
@@ -898,7 +1118,8 @@ struct CoralNPUTileSizeSelectionWorkgroupPass
     }
 
     auto loweringConfig = compilationInfo.getLoweringConfig();
-    auto cpuLoweringConfig = dyn_cast<IREE::CPU::LoweringConfigAttr>(loweringConfig);
+    auto cpuLoweringConfig =
+        dyn_cast<IREE::CPU::LoweringConfigAttr>(loweringConfig);
     if (!cpuLoweringConfig) {
       tilingOp->emitOpError("expected CPU lowering config");
       signalPassFailure();
@@ -906,13 +1127,15 @@ struct CoralNPUTileSizeSelectionWorkgroupPass
     }
 
     auto cacheParallelLevel = IREE::CPU::TilingLevel::CacheParallelTiles;
-    if (!cpuLoweringConfig.hasTilingLevel(static_cast<unsigned>(cacheParallelLevel))) {
+    if (!cpuLoweringConfig.hasTilingLevel(
+            static_cast<unsigned>(cacheParallelLevel))) {
       tilingOp->emitOpError("missing CacheParallelTiles config");
       signalPassFailure();
       return;
     }
 
-    auto cacheParallelAttr = cpuLoweringConfig.getTilingLevelAttr(static_cast<unsigned>(cacheParallelLevel));
+    auto cacheParallelAttr = cpuLoweringConfig.getTilingLevelAttr(
+        static_cast<unsigned>(cacheParallelLevel));
 
     SmallVector<NamedAttribute> configItems;
     DictionaryAttr oldDict = cpuLoweringConfig.getConfig();
@@ -920,7 +1143,9 @@ struct CoralNPUTileSizeSelectionWorkgroupPass
       configItems.push_back(attr);
     }
 
-    auto name = StringAttr::get(context, IREE::CPU::getTilingLevelName(IREE::CPU::TilingLevel::DistributionTiles));
+    auto name = StringAttr::get(context,
+                                IREE::CPU::getTilingLevelName(
+                                    IREE::CPU::TilingLevel::DistributionTiles));
     bool found = false;
     for (auto &item : configItems) {
       if (item.getName() == name) {
@@ -966,7 +1191,8 @@ createCoralNPUTileSizeSelectionDTCMPass() {
 std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createCoralNPUTileSizeSelectionDTCMPass(
     CoralNPUTileSizeSelectionDTCMOptions options) {
-  return std::make_unique<CoralNPUTileSizeSelectionDTCMPass>(std::move(options));
+  return std::make_unique<CoralNPUTileSizeSelectionDTCMPass>(
+      std::move(options));
 }
 
 std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>

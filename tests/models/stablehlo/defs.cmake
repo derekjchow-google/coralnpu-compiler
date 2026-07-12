@@ -14,17 +14,15 @@
 
 include(CMakeParseArguments)
 
-set(_COMMON_COMPILER_FLAGS
-    "--iree-hal-target-device=local"
-    "--iree-hal-local-target-device-backends=vmvx"
-    "--iree-hal-target-device=coralnpu"
-    "--coralnpu-target-abi=ilp32"
-    "--coralnpu-target-cpu-features=+m,+f,+zvl128b,+zve32f"
+string(CONCAT CORALNPU_CPU_FEATURES
+    "+m,+a,+f,+d,+zve32f,+zvl128b,"
+    "+zvtbase,+zvt8e,+zvt16e,+zvti8i32mm,+zvtf16f32mm,+zvtf32f32mm"
 )
 
-set(_COMMON_RUNNER_ARGS
-    "--device=local-sync"
-    "--device=coralnpu"
+set(_COMMON_COMPILER_FLAGS
+    "--iree-hal-target-device=coralnpu"
+    "--coralnpu-target-abi=ilp32"
+    "--coralnpu-target-cpu-features=${CORALNPU_CPU_FEATURES}"
 )
 
 # op_tests()
