@@ -71,10 +71,71 @@ void simulator_read_mem(uint32_t addr, void *data, size_t size) {
 }
 
 #include <cinttypes>
+#include <unistd.h>
+#include <cstdlib>
+#include <chrono>
 
 void simulator_run(uint32_t start_pc) {
   sim->Run(start_pc);
-  sim->WaitForTermination(1000000);
+
+  bool show_progress = isatty(fileno(stderr));
+  if (const char* env = std::getenv("CORALNPU_PROGRESS")) {
+    show_progress = (env[0] != '0');
+  }
+
+  const char spinner[] = {'|', '/', '-', '\\'};
+  int spinner_idx = 0;
+  auto start_time = std::chrono::steady_clock::now();
+  auto last_print_time = start_time;
+  uint64_t total_steps = 0;
+  const int step_size = 1; // Step by 1 for cycle-exact tracking
+  
+#ifdef USE_VERILATOR
+  const char* unit = "cycles";
+#else
+  const char* unit = "steps";
+#endif
+
+  if (show_progress) {
+    fprintf(stderr, "\rSimulation running [%c] %" PRIu64 " %s (0.0s)",
+            spinner[spinner_idx], total_steps, unit);
+    fflush(stderr);
+  }
+  
+  while (!sim->WaitForTermination(step_size)) {
+    total_steps += step_size;
+    auto now = std::chrono::steady_clock::now();
+    
+    if (show_progress) {
+      auto elapsed_from_last = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_print_time).count();
+      if (elapsed_from_last >= 100) { // Limit to 10 Hz
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
+        double elapsed_secs = elapsed / 1000.0;
+        
+        fprintf(stderr, "\rSimulation running [%c] %" PRIu64 " %s (%.1fs)",
+                spinner[spinner_idx], total_steps, unit, elapsed_secs);
+        fflush(stderr);
+        spinner_idx = (spinner_idx + 1) % 4;
+        last_print_time = now;
+      }
+    }
+  }
+  // No need to add step_size here because we stepped by 1 and the loop terminated when it halted,
+  // so total_steps is already cycle-exact.
+
+  auto end_time = std::chrono::steady_clock::now();
+  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+  double elapsed_secs = elapsed / 1000.0;
+  double steps_per_sec = 0.0;
+  if (elapsed_secs > 0.0) {
+    steps_per_sec = total_steps / elapsed_secs;
+  }
+
+  const char* prefix = show_progress ? "\r" : "";
+  // Use \033[K to clear to the end of the line to prevent trailing chars
+  fprintf(stderr, "%sSimulation finished: %" PRIu64 " %s (%.1fs, %.0f %s/s)\033[K\n",
+          prefix, total_steps, unit, elapsed_secs, steps_per_sec, unit);
+  fflush(stderr);
 
   // Read exception info from DDR (0x8F000000)
   uint32_t exception_info[3] = {0, 0, 0};
