@@ -37,7 +37,11 @@ config_setting(
 string_flag(
     name = "simulator_type",
     build_setting_default = "mpact",
-    values = ["mpact", "verilator"],
+    values = [
+        "mpact",
+        "verilator",
+        "verilator-vme",
+    ],
 )
 
 config_setting(
@@ -48,6 +52,11 @@ config_setting(
 config_setting(
     name = "use_verilator",
     flag_values = {":simulator_type": "verilator"},
+)
+
+config_setting(
+    name = "use_verilator_vme",
+    flag_values = {":simulator_type": "verilator-vme"},
 )
 
 # Target: simulator (formerly mpact_simulator)
@@ -65,12 +74,17 @@ cc_library(
     local_defines = select({
         ":use_mpact": ["USE_MPACT_PREBUILT"],
         ":use_verilator": ["USE_VERILATOR"],
+        ":use_verilator_vme": ["USE_VERILATOR"],
     }),
     deps = select({
         ":use_mpact": [":simulator_lib_import"],
         ":use_verilator": [
             "@coralnpu_hw//hw_sim:coralnpu_simulator_headers",
             "@coralnpu_hw//hw_sim:core_mini_axi_simulator_rvv",
+        ],
+        ":use_verilator_vme": [
+            "@coralnpu_hw//hw_sim:coralnpu_simulator_headers",
+            "@coralnpu_hw//hw_sim:core_mini_axi_simulator_vme",
         ],
     }),
 )
