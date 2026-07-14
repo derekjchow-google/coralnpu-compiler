@@ -12,8 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <stdint.h>
+
 extern "C" {
+
+struct ExceptionInfo {
+  uint32_t mcause;
+  uint32_t mepc;
+  uint32_t mtval;
+};
+
+__attribute__((section(".ddr_exception_info"))) volatile ExceptionInfo exception_info;
+
 void __attribute__((weak)) coralnpu_exception_handler() {
+  uint32_t mcause, mepc, mtval;
+  asm volatile("csrr %0, mcause" : "=r"(mcause));
+  asm volatile("csrr %0, mepc" : "=r"(mepc));
+  asm volatile("csrr %0, mtval" : "=r"(mtval));
+  exception_info.mcause = mcause;
+  exception_info.mepc = mepc;
+  exception_info.mtval = mtval;
+
   asm volatile("ebreak");
   while (1) {}
 }

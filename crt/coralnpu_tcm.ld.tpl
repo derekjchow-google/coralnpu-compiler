@@ -55,6 +55,7 @@ SECTIONS {
       . = ALIGN(16);
     } > ITCM
 
+
     /* Static Thread Local Storage template */
     .tdata : {
         PROVIDE_HIDDEN (__tdata_start = .);
@@ -170,6 +171,10 @@ SECTIONS {
       . += STACK_SIZE;
       __stack_end__ = .;
     } > DTCM
+
+    .ddr_exception_info 0x8F000000 (NOLOAD) : {
+        *(.ddr_exception_info)
+    }
 
     _end = .;
 }

@@ -56,8 +56,8 @@ static iree_status_t iree_hal_coralnpu_allocate_ddr(uint32_t* cursor,
       ((uint64_t)*cursor + alignment - 1u) & ~((uint64_t)alignment - 1u);
   uint64_t allocation_end = aligned + size;
 
-  // Limit to 256MB for simulation sanity.
-  if (allocation_end < aligned || allocation_end > 0x90000000u) {
+  // Limit to 1GB for simulation sanity.
+  if (allocation_end < aligned || allocation_end > 0xC0000000u) {
     return iree_make_status(IREE_STATUS_RESOURCE_EXHAUSTED,
                             "dispatch data exceeds the DDR limit");
   }

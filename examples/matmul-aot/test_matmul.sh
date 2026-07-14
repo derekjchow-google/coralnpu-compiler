@@ -16,6 +16,18 @@
 # Exit immediately on error, or when accessing an unset variable
 set -euo pipefail
 
+SIMULATOR="mpact"
+for arg in "$@"; do
+  case $arg in
+    --simulator=*)
+      SIMULATOR="${arg#*=}"
+      shift
+      ;;
+    *)
+      ;;
+  esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${SCRIPT_DIR}"
@@ -41,12 +53,14 @@ main() {
 
   echo
   echo "=== Phase 3: Build run_matmul ==="
-  bazel build --config=dev //examples/matmul-aot:run_matmul
+  bazel build --config=dev //examples/matmul-aot:run_matmul --//runtime/sim:simulator_type="${SIMULATOR}"
 
   echo
   echo "=== Phase 4: Running matmul ==="
   (
-    export LD_LIBRARY_PATH="${ROOT_DIR}/runtime/sim"
+    if [ "${SIMULATOR}" = "mpact" ]; then
+      export LD_LIBRARY_PATH="${ROOT_DIR}/runtime/sim"
+    fi
     "${ROOT_DIR}/bazel-bin/examples/matmul-aot/run_matmul"
   )
 

@@ -70,7 +70,25 @@ void simulator_read_mem(uint32_t addr, void *data, size_t size) {
 #endif
 }
 
+#include <cinttypes>
+
 void simulator_run(uint32_t start_pc) {
   sim->Run(start_pc);
   sim->WaitForTermination(1000000);
+
+  // Read exception info from DDR (0x8F000000)
+  uint32_t exception_info[3] = {0, 0, 0};
+#ifdef USE_MPACT_PREBUILT
+  sim->ReadMem(0x8F000000, sizeof(exception_info), reinterpret_cast<char*>(exception_info));
+#else
+  sim->ReadTCM(0x8F000000, sizeof(exception_info), reinterpret_cast<char*>(exception_info));
+#endif
+  if (exception_info[0] != 0) {
+    fprintf(stderr, "=== NPU Firmware Exception! ===\n");
+    fprintf(stderr, "mcause: 0x%08" PRIx32 "\n", exception_info[0]);
+    fprintf(stderr, "mepc:   0x%08" PRIx32 "\n", exception_info[1]);
+    fprintf(stderr, "mtval:  0x%08" PRIx32 "\n", exception_info[2]);
+    fprintf(stderr, "===============================\n");
+    fflush(stderr);
+  }
 }

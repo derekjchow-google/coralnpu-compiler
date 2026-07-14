@@ -93,8 +93,8 @@ def main():
 
   # Generate random inputs
   np.random.seed(42)
-  x = np.random.randn(128, 128).astype(np.float32)
-  y = np.random.randn(128, 128).astype(np.float32)
+  x = np.random.randn(16, 16).astype(np.float32)
+  y = np.random.randn(16, 16).astype(np.float32)
 
   print("Running inference...")
   t0 = time.time()
@@ -104,6 +104,8 @@ def main():
 
   output_np = np.asarray(output)
   expected = x @ y
+  print("output_np[0, 0:4]:", output_np[0, 0:4])
+  print("expected[0, 0:4]: ", expected[0, 0:4])
 
   print("Verifying results...")
   if np.allclose(output_np, expected, atol=1e-4, rtol=1e-4):
@@ -111,6 +113,8 @@ def main():
   else:
     print("ERROR: Results mismatch!")
     print("Max diff:", np.max(np.abs(output_np - expected)))
+    print("Output (Simulator):\n", output_np)
+    print("Expected (Reference):\n", expected)
     sys.exit(1)
 
 

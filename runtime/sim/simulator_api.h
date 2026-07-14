@@ -28,6 +28,8 @@ static const uint32_t coralnpu_itcm_start = 0x00000000u;
 static const uint32_t coralnpu_itcm_size = 0x00002000u;  // 8 KB
 static const uint32_t coralnpu_dtcm_start = 0x00010000u;
 static const uint32_t coralnpu_dtcm_size = 0x00008000u;  // 32 KB
+static const uint32_t coralnpu_ddr_start = 0x80000000u;
+static const uint32_t coralnpu_ddr_size = 0x80000000u;  // 2 GB
 
 void simulator_create(void);
 /* void simulator_load_itcm(uint32_t offset, const void *data, size_t size); */

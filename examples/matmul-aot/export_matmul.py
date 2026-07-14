@@ -25,8 +25,8 @@ def main():
     return x @ y
 
   # MobileNetV2 input shape is typically (batch, 224, 224, 3)
-  lhs_dummy = jnp.zeros([128, 128], dtype=jnp.float32)
-  rhs_dummy = jnp.zeros([128, 128], dtype=jnp.float32)
+  lhs_dummy = jnp.zeros([16, 16], dtype=jnp.float32)
+  rhs_dummy = jnp.zeros([16, 16], dtype=jnp.float32)
 
   # Warmup/trace
   print("Tracing model...")

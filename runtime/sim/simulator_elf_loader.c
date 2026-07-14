@@ -54,13 +54,15 @@ static iree_status_t iree_hal_coralnpu_validate_segment(uint32_t address,
   if (iree_hal_coralnpu_range_fits(coralnpu_itcm_start, coralnpu_itcm_size,
                                    address, size) ||
       iree_hal_coralnpu_range_fits(coralnpu_dtcm_start, coralnpu_dtcm_size,
+                                   address, size) ||
+      iree_hal_coralnpu_range_fits(coralnpu_ddr_start, coralnpu_ddr_size,
                                    address, size)) {
     return iree_ok_status();
   }
 
   return iree_make_status(IREE_STATUS_OUT_OF_RANGE,
                           "ELF PT_LOAD segment at 0x%08" PRIx32
-                          " size=%zu is outside ITCM/DTCM",
+                          " size=%zu is outside ITCM/DTCM/DDR",
                           address, size);
 }
 
@@ -83,9 +85,15 @@ static iree_status_t iree_hal_coralnpu_copy_segment(uint32_t address,
     return iree_ok_status();
   }
 
+  if (iree_hal_coralnpu_range_fits(coralnpu_ddr_start, coralnpu_ddr_size,
+                                   address, size)) {
+    simulator_write_mem(address, source, size);
+    return iree_ok_status();
+  }
+
   return iree_make_status(IREE_STATUS_OUT_OF_RANGE,
                           "ELF segment at 0x%08" PRIx32
-                          " size=%zu is outside ITCM/DTCM",
+                          " size=%zu is outside ITCM/DTCM/DDR",
                           address, size);
 }
 
