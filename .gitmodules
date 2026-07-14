@@ -6,4 +6,4 @@
 	url = https://github.com/iree-org/llvm-project
 [submodule "third_party/coralnpu"]
 	path = third_party/coralnpu
-	url = https://github.com/google-coral/coralnpu
+	url = git@github.com:derekjchow-google/coralnpu.git
